@@ -1,14 +1,15 @@
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 from lxml import html
 import requests
 import json
 import smtplib
+import os
 
 app = Flask('__main__')
 
 mailHost = "alexanderulrich98@gmx.de"
 mailTo = ["alexanderulrich98@gmail.com", "ritschulrich@live.de"]
-favoriteList = ["alexFavoriteSeries", "ritschFavoriteSeries"]
+favoriteList = ["alex_favorite", "ritsch_favorite"]
 
 
 @app.route('/')
@@ -18,29 +19,77 @@ def main():
     return "HOME"
 
 
+@app.route('/setFavorite')
+def defineFavorites():
+    return render_template("favorite.html")
+
+
+@app.route('/getFavorite', methods=["POST"])
+def writeFavoritesToList():
+    user = request.form.get("user")
+    favoriteSerie = request.form.get("title")
+    path = "static/" + user + "_favorite.json"
+    favoritesList = []
+    if os.path.exists(path):
+        readFavoriteFile = open(path, "r")
+        favorites = readFavoriteFile.read()
+        favoritesList = favorites.split(",")
+        print(favoritesList)
+    if not (favoriteSerie in favoritesList):
+        favoriteFile = open(path, "a+")
+        favoriteFile.write(favoriteSerie)
+        print("Favorite %s is not in list" % favoriteSerie)
+    return render_template("favorite.html")
+
+
 @app.route('/test', methods=["GET", "POST"])
 def test():
     serien = getDataFromRenderedPage("test.html")
     titles = getTitle(serien)
     currents = getCurrent(serien)
     oldSeries = readSerienToJsonFile()
-
     series = buildSeries(titles, currents)
-
     favoriteSeries = getFavoriteSeries(series, favoriteList[0])
-
     seriesToSend = checkSeriesInCurrentList(oldSeries, favoriteSeries)
+    msgToSend = getMsgToSend(seriesToSend)
 
-    # sendSeriesPerMail(seriesToSend)
+    print(msgToSend)
 
-    writeSerienToJsonFile(oldSeries, seriesToSend)
+    if sendSeriesPerMail(mailHost, mailTo[0], msgToSend, "Favorite Series"):
+        writeSerienToJsonFile(oldSeries, seriesToSend)
 
     return "TEST"
 
 
-def sendSeriesPerMail(seriesToSend):
-    if len(seriesToSend) > 0:
-        print(seriesToSend)
+def getMsgToSend(seriesToSend):
+    seriesToString = ""
+
+    if isinstance(seriesToSend, type(None)):
+        return ""
+
+    for serie in seriesToSend:
+        seriesToString += "Serie: " + serie[0] + " - aktuelle Folge: " + serie[1] + '\n'
+    return seriesToString
+
+
+def sendSeriesPerMail(fromAdresse, toAdresse, message, betreff):
+    if message == "":
+        return
+
+    try:
+        server = smtplib.SMTP('mail.gmx.com', 587)
+        server.starttls()
+        header = 'To:' + toAdresse + '\n' + 'From: ' + fromAdresse + '\n' + "Subject: " + betreff + '\n'
+        msg = header + '\n' + message
+        server.login(fromAdresse, "<PASSWORT>")
+        server.sendmail(fromAdresse, toAdresse, msg)
+        server.quit()
+        print("Success: Email sent!")
+        return True
+    except Exception as e:
+        print(e)
+
+    return False
 
 
 def buildSeries(titles, currents):
@@ -49,7 +98,13 @@ def buildSeries(titles, currents):
 
 def checkSeriesInCurrentList(oldSeries, favoriteSeries):
     if oldSeries and favoriteSeries:
-        return list(filter(lambda serieToSend: not serieToSend[1] in oldSeries[serieToSend[0]], favoriteSeries))
+        return list(filter(lambda serieToSend: not isSerieInOldList(oldSeries, serieToSend), favoriteSeries))
+
+
+def isSerieInOldList(oldSeries, serieToSend):
+    if serieToSend[0] in oldSeries:
+        if serieToSend[1] in oldSeries[serieToSend[0]]:
+            return serieToSend
 
 
 def readSerienToJsonFile():
@@ -63,10 +118,11 @@ def readSerienToJsonFile():
 
 def writeSerienToJsonFile(oldSeries, seriesToSend):
     for serieToSend in seriesToSend:
-        if oldSeries[serieToSend[0]]:
+        if serieToSend[0] in oldSeries:
             oldSeries[serieToSend[0]].append(serieToSend[1])
         else:
             oldSeries[serieToSend[0]] = [serieToSend[1]]
+            print("Serie %s nicht vorhanden" % serieToSend)
     file = open("static/aktuelleSerien.json", "w")
     file.write(str(oldSeries).replace("'", '"'))
 
@@ -78,8 +134,13 @@ def getFavoriteSeries(series, favoriteList):
 def isFavorite(serie, favoriteList):
     file = open("static/" + favoriteList + ".fav")
     favoriteSeries = file.read()
-    if favoriteSeries.strip() != "":
-        return serie[0].lower() in favoriteSeries.lower()
+    splitedList = favoriteSeries.split(",")
+    print(splitedList)
+    if splitedList:
+        print("xxxxxxxxx")
+        for s in splitedList:
+            print(s)
+            return serie[0].lower() in s.lower()
 
 
 def getTitle(data):
